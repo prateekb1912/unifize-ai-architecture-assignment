@@ -131,3 +131,126 @@ We can have different strategies for retrieval from vector db mostly mixing and 
 - Metadata Filtering: We filter chunks based on our metadata and user context: tenant_id (for isolation), user_role, document_type, etc.
 - Hybrid Search: Semantic Search using Vectors + Keyword BM25 Search - for both semantically similar results as well as matching certain important keywords/phrases required
 - Merge, Dedup and Rerank: Combine the hybrid search results and dedup and rerank the chunks based on a score (maybe 50-50 for both vector and keyword search, maybe keyword has priority, etc.)
+
+## Explainability, Audit & Compliance
+
+- From the above workflows and data models, we can see that our system stores and logs data at each step from data ingestion to chunk, creating embeddings as well as enforcing citations in AI responses, storing prompts, queries, retrieved chunks, LLM and it's configurations used.
+- These data allow us to replay the RAG workflow with the same configuration and inspect the AI decisions.
+- The enforcement of retrieving chunks and citing the same helps is mitigating hallucinations to a minimum as the actual source which contains the ground truth is enforced in the prompt as well as the response from the LLM.
+- We also have user-trust features including source citations, adding confidence level to each LLM response based on it's content and even enforcing the LLM to add a confidence level as well as disclaimers on it's own response and the source it used.
+
+### Example of Auditable AI Response
+
+```json
+{
+  "response_id": "resp_8f3a21",
+  "tenant_id": "tenant_42",
+  "user_id": "user_77",
+
+  "query": {
+    "record_id": "SOP-119",
+    "workflow_stage": "Draft Review",
+    "role": "Quality Manager",
+    "question": "What risks are missing in this SOP?",
+    "analysis_type": "risk_analysis"
+  },
+
+  "retrieval": {
+    "retrieval_query": "Risks and missing controls in SOPs during Draft Review stage",
+    "retrieved_chunks": [
+      {
+        "chunk_id": "chunk_881",
+        "doc_id": "doc_vendor_onboarding_v3",
+        "section": "Risk Assessment",
+        "similarity_score": 0.82
+      },
+      {
+        "chunk_id": "chunk_912",
+        "doc_id": "doc_vendor_onboarding_v2",
+        "section": "Compliance Checklist",
+        "similarity_score": 0.78
+      }
+    ]
+  },
+
+  "model": {
+    "name": "gpt-4.1",
+    "temperature": 0.2,
+    "max_tokens": 800
+  },
+
+  "prompt": "You are an AI assistant for analyzing SOPs...<full prompt stored>",
+
+  "response": {
+    "answer": "The SOP does not define a vendor risk classification step before approval.",
+    "suggestions": [
+      "Add vendor risk scoring based on financial and compliance history.",
+      "Include escalation procedure for high-risk vendors."
+    ],
+    "citations": [
+      {
+        "doc_id": "doc_vendor_onboarding_v3",
+        "section": "Risk Assessment",
+        "chunk_id": "chunk_881"
+      }
+    ],
+    "confidence": "Medium",
+    "confidence_score": 0.67
+  },
+
+  "created_at": "2026-02-07T10:30:00Z"
+}
+```
+
+## Performance and Scalability
+
+According to the requirements, our system handles:
+
+- ~1k AI queries/day
+- Read-heavy workload
+
+### Caching Strategies
+
+- Query Result Cache: For each query, we hash query + user_id + tenant_id (or some other combination of metadata) and cache the final AI response
+
+- Retrieval Cache: On the retrieval side, we can cache the query_embedding hash and cache the final retrieved chunks to be used in the AI response.
+
+### Async vs Sync
+
+Because we have some CPU-heavy processing - PDF ingestion, chunking, embedding creations, etc. we would lean towards async workers as they aren't also user facing (can be queued in the background till processing is done).
+
+For the retrieval-side processing, we will use sync pipelines as they aren't a load on the CPU and are generally low in latency, plus user-facing so need to be resolved in the same request, ideally.
+
+Although, the retrieval phase also can be moved to an async worker if the latency is high and then response is streamed (using Websockets or HttpStreaming) to the user.
+
+### Cost Control
+
+Use smaller embedding models during embedding phase and during query embedding generation.
+
+For the RAQ query generation, use a mid-level model (general-purpose, e.g. gpt-4, etc.)
+
+For the final response, we need a higher-end reasoning model (for source citation, context usage and to generate a confidence score, etc.)
+
+Apart from this, caching, chunk compression, deduplication, etc. are small wins that can be easily implemented.
+
+### Horizontal Scaling
+
+| Component         | Scaling approach                                 |
+| ----------------- | ------------------------------------------------ |
+| API servers       | Horizontal autoscaling                           |
+| Embedding workers | Scale worker count with queue                    |
+| Vector DB         | Tenant-based sharding (already implemented)      |
+| Database          | Read replicas, id-based or time-based partitions |
+| Cahe              | Cluster mode                                     |
+
+## Testing
+
+1. Retrieval Relevance: Have a curated set of queries and expected chunks for them. And after each retrieval method change, check how many relevant chunks and how much noise is retrieved and compare the ranking quality.
+
+2. Validating Prompt Changes: Again, for a set of queries, store expected answers and compare - citations, confidence scores, structure, hallucination, etc.
+
+3. Regressions in AI Output: Keep track of amount of responses with citations, average confidence score, "Not found" issues, user feedback. Keep a running average and an alert at sudden changes in numbers.
+
+4. Monitoring: Keep a track of the retrieval metrics (avg. similarity score, etc.), generation metrics (avg. tokens used, latency, cost per query, etc.) and confidence rates, user feedbacks, etc.
+
+5. Additionally, we can also add human in the loop and regulary check the sample responses regularly by domain experts.
