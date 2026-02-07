@@ -1,0 +1,162 @@
+openapi: 3.0.3
+info:
+  title: AI Platform – SoP Analysis API
+  version: 1.0.0
+  description: |
+    Backend service for document ingestion, RAG queries, and  AI responses.
+servers:
+  - url: https://unifize.com/api/v1/ai
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    IngestResponse:
+      type: object
+      properties:
+        doc_id:
+          type: string
+        version:
+          type: integer
+        status:
+          type: string
+          example: processing
+
+    QueryRequest:
+      type: object
+      required: [record_id, workflow_stage, role, question]
+      properties:
+        record_id:
+          type: string
+        workflow_stage:
+          type: string
+        role:
+          type: string
+        analysis_type:
+          type: string
+          example: risk_analysis
+        question:
+          type: string
+
+    Citation:
+      type: object
+      properties:
+        doc_id:
+          type: string
+        section:
+          type: string
+        chunk_id:
+          type: string
+
+    QueryResponse:
+      type: object
+      properties:
+        response_id:
+          type: string
+        answer:
+          type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Citation"
+        confidence:
+          type: string
+          enum: [Low, Medium, High]
+
+    AIResponse:
+      type: object
+      properties:
+        response_id:
+          type: string
+        tenant_id:
+          type: string
+        prompt:
+          type: string
+        retrieved_chunks:
+          type: array
+          items:
+            type: string
+        answer:
+          type: string
+        confidence_score:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+
+paths:
+  /use-case/ingest:
+    post:
+      summary: Upload a new document or create a new version
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                metadata:
+                  type: string
+                  description: JSON string containing document metadata
+      responses:
+        "202":
+          description: Document accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "400":
+          description: Invalid file or metadata
+
+  /use-case/query:
+    post:
+      summary: Run RAG query for SoP analysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+      responses:
+        "200":
+          description: AI response generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResponse"
+        "404":
+          description: Record not found
+
+  /use-case/responses/{response_id}:
+    get:
+      summary: Fetch auditable AI response
+      parameters:
+        - in: path
+          name: response_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audit payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AIResponse"
+        "404":
+          description: Response not found

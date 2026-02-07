@@ -81,3 +81,53 @@ To ensure the embeddings are in sync with the source document, we can have eithe
 2. Keep a content hash for all the chunks and only embed for the chunks with a content hash not already present in the vector db.
 
 We only re-embed if new chunks are added, content hash has changed or if the embedding model has been updated.
+
+## RAG Workflow
+
+User Query --> Context Intake & Validation (customer id, user role, usecase, query, etc.) --> Generate Retrieval Query (for better retrieval from vectordb rather than using the user question directly) --> Retrieval from VectorDB (hybrid search - keyword+ semantic search -> merge, rerank and dedup) --> Create Prompt with the Added Context from Retrieved Chunks (add user context, chunks as well other instructions to always cite the relevant sources) --> LLM Invokation (set temperature, token_limits, etc. ) --> Post Processing (validate cited chunks, format the output properly, add confidence scores based on results containing relevant sources, answer quality, user feedback, etc)
+
+### Prompt Template Example
+
+```markdown
+SYSTEM:
+You are an AI assistant for analyzing Standard Operating Procedures (SOPs).
+You must ONLY use the provided excerpts.
+If the answer is not present, say "Not found in SOP".
+
+Always:
+• Provide citations [DocID:Section]
+• Highlight risks or gaps explicitly
+• Be concise and factual
+
+USER CONTEXT:
+Record ID: {record_id}
+User Role: {role}
+Workflow Stage: {stage}
+Use Case: {analysis_type}
+
+USER QUESTION:
+{question}
+
+## RETRIEVED SOP EXCERPTS:
+
+[Doc: {doc_id} | Section: {section}]
+{chunk_text}
+
+---
+
+TASK:
+
+1. Answer the question.
+2. Suggest improvements (if applicable).
+3. Provide citations.
+4. Provide confidence level (High/Medium/Low).
+5. Mention if information is missing.
+```
+
+### Retrieval Strategies
+
+We can have different strategies for retrieval from vector db mostly mixing and matching based on the quality of the retrieved chunks.
+
+- Metadata Filtering: We filter chunks based on our metadata and user context: tenant_id (for isolation), user_role, document_type, etc.
+- Hybrid Search: Semantic Search using Vectors + Keyword BM25 Search - for both semantically similar results as well as matching certain important keywords/phrases required
+- Merge, Dedup and Rerank: Combine the hybrid search results and dedup and rerank the chunks based on a score (maybe 50-50 for both vector and keyword search, maybe keyword has priority, etc.)
